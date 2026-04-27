@@ -54,7 +54,7 @@ const STATIC_MODE = contentMeta.static === true;
  * Persistent cache directory: stores processed WebP variants so unchanged
  * images are not re-encoded on every build.
  */
-const CACHE_DIR = path.join(__dirname, '.image-cache');
+const CACHE_DIR = path.join(__dirname, '.cache');
 const CACHE_INDEX_PATH = path.join(CACHE_DIR, 'cache-index.json');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -221,17 +221,58 @@ function copyDir(src, dest) {
   }
 }
 
-// ─── Load persistent image cache index ─────────────────────────────────────
+function removeFileIfExists(filePath) {
+  try {
+    if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
+  } catch {
+    // non-fatal: cache cleanup should not break the build
+  }
+}
+
+function removeEmptyDirsUpward(startDir, stopDir) {
+  let current = startDir;
+  while (current.startsWith(stopDir) && current !== stopDir) {
+    if (!fs.existsSync(current)) {
+      current = path.dirname(current);
+      continue;
+    }
+    if (fs.readdirSync(current).length > 0) break;
+    try {
+      fs.rmdirSync(current);
+    } catch {
+      break;
+    }
+    current = path.dirname(current);
+  }
+}
+
+function removeCacheEntryArtifacts(cacheKey, entry) {
+  if (!entry) return;
+  const [yearDir, slug] = cacheKey.split('/');
+  if (!yearDir || !slug) return;
+
+  const cacheSubDir = path.join(CACHE_DIR, yearDir, slug);
+  const names = new Set(entry.files || []);
+  if (entry.ogName) names.add(entry.ogName);
+
+  for (const name of names) {
+    removeFileIfExists(path.join(cacheSubDir, name));
+  }
+  removeEmptyDirsUpward(cacheSubDir, CACHE_DIR);
+}
+
+// ─── Load persistent cache index ───────────────────────────────────────────
 
 let cacheIndex = {};
 if (fs.existsSync(CACHE_INDEX_PATH)) {
   try {
     cacheIndex = JSON.parse(fs.readFileSync(CACHE_INDEX_PATH, 'utf8'));
-    console.log(`Loaded image cache index (${Object.keys(cacheIndex).length} entr(ies)).`);
+    console.log(`Loaded cache index (${Object.keys(cacheIndex).length} entr(ies)).`);
   } catch {
-    console.warn('Warning: could not read .image-cache/cache-index.json; all images will be rebuilt.');
+    console.warn('Warning: could not read .cache/cache-index.json; all images will be rebuilt.');
   }
 }
+const seenCacheKeys = new Set();
 
 // ─── dist scaffold ───────────────────────────────────────────────────────────
 
@@ -407,8 +448,9 @@ if (fs.existsSync(aboutMdPath) && fs.existsSync(aboutHtmlDistPath)) {
         let fullWidth, fullHeight, fullName, srcsetParts = [];
         const succeeded = [];
 
-        // ─── Image cache check ───────────────────────────────────────────────
+        // ─── Cache check ──────────────────────────────────────────────────────
         const cacheKey = `${yearDir}/${slug}/${f}`;
+        seenCacheKeys.add(cacheKey);
         const fileHash = hashFile(srcFile);
         let usedCache = false;
         const cachedEntry = cacheIndex[cacheKey];
@@ -433,6 +475,12 @@ if (fs.existsSync(aboutMdPath) && fs.existsSync(aboutHtmlDistPath)) {
         }
 
         if (!usedCache) {
+          // Remove stale cache variants for this source file before regenerating.
+          // This keeps the cache directory aligned when generated filenames change.
+          if (cachedEntry) {
+            removeCacheEntryArtifacts(cacheKey, cachedEntry);
+          }
+
           try {
             // Read original dimensions first so we don't upscale
             const meta = await sharp(srcFile).metadata();
@@ -487,7 +535,7 @@ if (fs.existsSync(aboutMdPath) && fs.existsSync(aboutHtmlDistPath)) {
             console.log(`  ${f} → ${fullWidth}×${fullHeight} (copied as-is)`);
           }
 
-          // ─── Save processed variants to .image-cache/ ──────────────────────
+          // ─── Save processed variants to .cache/ ──────────────────────
           const cachedFiles = succeeded.length > 0
             ? succeeded.map(v => v.name)
             : (fullName ? [fullName] : []);
@@ -586,13 +634,61 @@ if (fs.existsSync(aboutMdPath) && fs.existsSync(aboutHtmlDistPath)) {
   fs.writeFileSync(path.join(DIST, 'manifest.json'), JSON.stringify(manifest, null, 2));
   console.log(`\nWrote _site/manifest.json with ${output.length} collection(s).`);
 
-  // ─── Persist updated image cache index ─────────────────────────────────────
+  // ─── Prune stale cache entries/files ─────────────────────────────────────
+  // Any cache key not seen in this build corresponds to a removed/renamed
+  // source image and should be deleted.
+  for (const cacheKey of Object.keys(cacheIndex)) {
+    if (seenCacheKeys.has(cacheKey)) continue;
+    removeCacheEntryArtifacts(cacheKey, cacheIndex[cacheKey]);
+    delete cacheIndex[cacheKey];
+    console.log(`Pruned stale cache entry: ${cacheKey}`);
+  }
+
+  // Remove orphaned files under .cache that are not referenced by
+  // cache-index.json (e.g. leftovers from prior formats or interrupted builds).
+  if (fs.existsSync(CACHE_DIR)) {
+    const referencedByDir = new Map();
+    for (const [cacheKey, entry] of Object.entries(cacheIndex)) {
+      const [yearDir, slug] = cacheKey.split('/');
+      if (!yearDir || !slug || !entry) continue;
+      const dir = path.join(CACHE_DIR, yearDir, slug);
+      const refs = referencedByDir.get(dir) || new Set();
+      for (const name of entry.files || []) refs.add(name);
+      if (entry.ogName) refs.add(entry.ogName);
+      referencedByDir.set(dir, refs);
+    }
+
+    const yearEntries = fs.readdirSync(CACHE_DIR, { withFileTypes: true });
+    for (const yearEntry of yearEntries) {
+      if (!yearEntry.isDirectory()) continue;
+      const yearPath = path.join(CACHE_DIR, yearEntry.name);
+      const slugEntries = fs.readdirSync(yearPath, { withFileTypes: true });
+
+      for (const slugEntry of slugEntries) {
+        if (!slugEntry.isDirectory()) continue;
+        const slugPath = path.join(yearPath, slugEntry.name);
+        const refs = referencedByDir.get(slugPath) || new Set();
+        const files = fs.readdirSync(slugPath, { withFileTypes: true });
+
+        for (const file of files) {
+          if (!file.isFile()) continue;
+          if (refs.has(file.name)) continue;
+          removeFileIfExists(path.join(slugPath, file.name));
+          console.log(`Pruned orphan cache file: ${yearEntry.name}/${slugEntry.name}/${file.name}`);
+        }
+
+        removeEmptyDirsUpward(slugPath, CACHE_DIR);
+      }
+    }
+  }
+
+  // ─── Persist updated cache index ──────────────────────────────────────────
   try {
     ensureDir(CACHE_DIR);
     fs.writeFileSync(CACHE_INDEX_PATH, JSON.stringify(cacheIndex, null, 2));
-    console.log(`Wrote .image-cache/cache-index.json (${Object.keys(cacheIndex).length} entr(ies)).`);
+    console.log(`Wrote .cache/cache-index.json (${Object.keys(cacheIndex).length} entr(ies)).`);
   } catch (err) {
-    console.warn(`Warning: could not write image cache index: ${err.message}`);
+    console.warn(`Warning: could not write cache index: ${err.message}`);
   }
 
   // ─── Inject absolute OG URLs into _site/index.html ───────────────────────

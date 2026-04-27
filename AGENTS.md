@@ -81,7 +81,7 @@ When proposing or applying any change to this project, agents must:
 | CSS minification | `clean-css` dev-dependency — minifies the inlined stylesheet in every HTML file (~36% size reduction) |
 | Lightbox | PhotoSwipe v5 via CDN |
 | `_site/` | **Never committed** — built output; add to `.gitignore` |
-| `.image-cache/` | **Never committed** — persistent cache of processed WebP variants; add to `.gitignore` |
+| `.cache/` | Repository-tracked cache of processed WebP variants; updated by build + CI |
 | `manifest.json` | Written to `_site/manifest.json` at build time; never committed |
 | Static mode | Enabled by `"static": true` in `content/meta.json` — pre-renders the homepage cover grid and generates `_site/collection/[slug]/index.html` per collection |
 | Static routing | Homepage cover cards link to `collection/[slug]/`; `collection.html?slug=` still works as a JS-rendered fallback |
@@ -116,7 +116,7 @@ portfolio/
     profile.jpg              <- optional profile photo; copied to _site/ and preloaded as LCP image on the about page
   build.js                   <- main build script (image optimisation + manifest + pre-render)
   package.json               <- scripts: dev, build; devDependencies: sharp, marked, terser, clean-css, serve
-  .gitignore                 <- must exclude: _site/, .image-cache/, node_modules/
+  .gitignore                 <- must exclude: _site/, node_modules/
   .github/
     workflows/
       deploy.yml
@@ -146,11 +146,13 @@ Running `node build.js` produces a clean `_site/` folder:
    hint is injected into `<head>` so the browser discovers the LCP profile photo immediately.
 5. **Image optimisation** — for every image under `content/photos/`, uses `sharp` to generate
    four WebP variants at 400w, 800w, 1200w, and 1920w (quality 85), writing them to
-   `_site/photos/`. Before invoking sharp, `build.js` checks `.image-cache/cache-index.json`
+   `_site/photos/`. Before invoking sharp, `build.js` checks `.cache/cache-index.json`
    for a SHA-256 hash match; if the source file is unchanged and all cached variants are
-   present in `.image-cache/`, the cached WebP files are copied to `_site/photos/` directly
+   present in `.cache/`, the cached WebP files are copied to `_site/photos/` directly
    (skipping sharp entirely). After a successful encode the new variants are written to
-   `.image-cache/` and the index is updated. Source-only files (`meta.json`, `about.md`) are
+  `.cache/` and the index is updated. Cache entries and files that no longer map to
+  current source images are pruned, so removed/renamed files are cleaned automatically.
+  Source-only files (`meta.json`, `about.md`) are
    never copied.
    Additionally, for the **cover image** of each collection, a dedicated `{stem}-og.webp` is
    generated at **1200×630 centre-crop** (quality 80) and stored alongside the other variants.
@@ -330,15 +332,15 @@ On every push to `main`, the workflow must:
 
 1. Checkout the repository.
 2. Set up Node 22 (use `actions/setup-node@v4`).
-3. Restore `.image-cache/` from the GitHub Actions cache (use `actions/cache@v4`, key
-   `image-cache-${{ hashFiles('content/photos/**') }}` with restore-key `image-cache-`).
-4. Run `npm ci`.
-5. Run `npm run build` to produce `_site/`.
+3. Run `npm ci`.
+4. Run `npm run build` to produce `_site/`.
+5. Commit and push `.cache/` updates back to `main` when there are changes.
 6. Upload `_site/` as a GitHub Pages artifact (use `actions/upload-pages-artifact@v3` —
    its default path is `_site/`, so no explicit `path:` argument is needed).
 7. Deploy to GitHub Pages (use `actions/deploy-pages@v4`).
 
-Configure the workflow with `pages: write` and `id-token: write` permissions.
+Use `paths-ignore: ['.cache/**']` on the push trigger to avoid cache-only loop runs.
+Configure the workflow with `contents: write`, `pages: write`, and `id-token: write` permissions.
 
 ---
 

@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '.cache/**'
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -23,19 +25,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Restore image cache
-        uses: actions/cache@v4
-        with:
-          path: .image-cache
-          key: image-cache-${{ hashFiles('content/photos/**') }}
-          restore-keys: |
-            image-cache-
 
       - name: Install dependencies
         run: npm ci
@@ -44,6 +41,21 @@ jobs:
         run: npm run build
         env:
           SITE_URL: https://arsleutjes.nl
+
+      - name: Commit cache updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .cache
+
+          if git diff --cached --quiet; then
+            echo "No .cache changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update cache [skip ci]"
+          git push origin "${GITHUB_REF_NAME}"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
