@@ -48,6 +48,9 @@ Edit `content/meta.json` to set site-wide options:
   This makes the LCP image discoverable directly from the HTML without any JavaScript
   execution.
 
+Homepage cover cards keep fixed responsive column widths (3/2/1 across desktop/tablet/mobile).
+When the last row is incomplete (for example 4 albums), cards do not stretch to full row width.
+
 ## Deploying to GitHub Pages
 
 Deploys automatically on every push to `main` via GitHub Actions.

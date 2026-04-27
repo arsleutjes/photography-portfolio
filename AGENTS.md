@@ -48,6 +48,7 @@ When proposing or applying any change to this project, agents must:
   **Jost** (geometric sans-serif) for navigation and body text.
 - **Homepage (`index.html`):** CSS flexbox cover grid.
   - 3 columns on desktop, 2 on tablet, 1 on mobile.
+  - Cards keep fixed responsive column widths; incomplete rows do not stretch cards to full width.
   - Each card shows: cover image, collection title, year.
   - Cards link to `collection/[slug]/` (static mode) or `collection.html?slug=[slug]` (JS fallback).
 - **Collection page (`collection.html`):** Justified flex photo grid.
