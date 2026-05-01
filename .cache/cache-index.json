@@ -1550,5 +1550,21 @@
     "fullName": "DSC08623-1920w.webp",
     "fullWidth": 1920,
     "fullHeight": 2880
+  },
+  "profile/profile.jpg": {
+    "hash": "715107466cbe3dad995cc2b9b927bc75a2c5ceda3832c1ce650425374b5d61f8",
+    "files": [
+      "profile-400w.webp",
+      "profile-800w.webp",
+      "profile-1200w.webp",
+      "profile-1920w.webp"
+    ],
+    "srcsetParts": [
+      "profile-400w.webp 400w",
+      "profile-800w.webp 800w",
+      "profile-1200w.webp 1200w",
+      "profile-1920w.webp 1920w"
+    ],
+    "fullName": "profile-1920w.webp"
   }
 }

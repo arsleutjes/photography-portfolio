@@ -370,16 +370,118 @@ if (fs.existsSync(aboutMdPath) && fs.existsSync(aboutHtmlDistPath)) {
     process.exit(1);
   }
 
-  // Copy profile.jpg to _site/ (lives next to about.md in content/).
+  // Optimize profile.jpg and generate responsive WebP variants.
   const profileSrc = path.join(CONTENT, 'profile.jpg');
+  let profileSrcset = '';
+  let profileFallback = '';
   if (fs.existsSync(profileSrc)) {
-    fs.copyFileSync(profileSrc, path.join(DIST, 'profile.jpg'));
-    console.log('Copied profile.jpg');
+    const profileCacheKey = 'profile/profile.jpg';
+    seenCacheKeys.add(profileCacheKey);
+    const profileFileHash = hashFile(profileSrc);
+    let profileUsedCache = false;
+    const profileCachedEntry = cacheIndex[profileCacheKey];
+
+    // Check cache first
+    if (profileCachedEntry && profileCachedEntry.hash === profileFileHash) {
+      const cacheFiles = profileCachedEntry.files || [];
+      const allPresent = cacheFiles.length > 0 &&
+        cacheFiles.every(name => fs.existsSync(path.join(CACHE_DIR, 'profile', name)));
+      if (allPresent) {
+        for (const name of cacheFiles) {
+          fs.copyFileSync(
+            path.join(CACHE_DIR, 'profile', name),
+            path.join(DIST, name)
+          );
+        }
+        profileSrcset = profileCachedEntry.srcsetParts.join(', ');
+        profileFallback = profileCachedEntry.fullName;
+        profileUsedCache = true;
+        console.log(`profile.jpg → cache hit (${cacheFiles.length} variant(s) restored)`);
+      }
+    }
+
+    if (!profileUsedCache) {
+      // Remove stale cache variants before regenerating
+      if (profileCachedEntry) {
+        removeCacheEntryArtifacts(profileCacheKey, profileCachedEntry);
+      }
+
+      try {
+        const profileMeta = await sharp(profileSrc).metadata();
+        const origWidth = profileMeta.width;
+        const origHeight = profileMeta.height;
+
+        const profileSucceeded = [];
+        const profileSrcsetParts = [];
+
+        for (const w of RESPONSIVE_WIDTHS) {
+          if (w > origWidth) continue; // never upscale
+          const outName = `profile-${w}w.webp`;
+          const distFile = path.join(DIST, outName);
+          const info = await sharp(profileSrc)
+            .resize({ width: w, fit: 'inside', withoutEnlargement: true })
+            .webp({ quality: WEBP_QUALITY })
+            .toFile(distFile);
+          profileSrcsetParts.push(`${outName} ${info.width}w`);
+          profileSucceeded.push({ name: outName, width: info.width, height: info.height });
+          console.log(`profile.jpg → ${outName} ${info.width}×${info.height}`);
+        }
+
+        // If no variant was generated (tiny image), produce one at native size
+        if (profileSucceeded.length === 0) {
+          const outName = 'profile.webp';
+          const distFile = path.join(DIST, outName);
+          const info = await sharp(profileSrc)
+            .webp({ quality: WEBP_QUALITY })
+            .toFile(distFile);
+          profileSrcsetParts.push(`${outName} ${info.width}w`);
+          profileSucceeded.push({ name: outName, width: info.width, height: info.height });
+          console.log(`profile.jpg → ${outName} ${info.width}×${info.height} (native size)`);
+        }
+
+        profileSrcset = profileSrcsetParts.join(', ');
+        const largest = profileSucceeded[profileSucceeded.length - 1];
+        profileFallback = largest.name;
+
+        // Cache the profile variants
+        const profileCacheSubDir = path.join(CACHE_DIR, 'profile');
+        ensureDir(profileCacheSubDir);
+        for (const variant of profileSucceeded) {
+          try {
+            fs.copyFileSync(
+              path.join(DIST, variant.name),
+              path.join(profileCacheSubDir, variant.name)
+            );
+          } catch { /* non-fatal */ }
+        }
+        cacheIndex[profileCacheKey] = {
+          hash: profileFileHash,
+          files: profileSucceeded.map(v => v.name),
+          srcsetParts: profileSrcsetParts,
+          fullName: profileFallback,
+        };
+      } catch (err) {
+        console.warn(`Warning: could not optimise profile.jpg: ${err.message}`);
+        // Fallback: copy as-is
+        fs.copyFileSync(profileSrc, path.join(DIST, 'profile.jpg'));
+        profileFallback = 'profile.jpg';
+        profileSrcset = '';
+      }
+    }
+
     // Inject <link rel="preload"> for the profile photo LCP image into about.html.
     if (fs.existsSync(aboutHtmlDistPath)) {
       let aboutHtml = fs.readFileSync(aboutHtmlDistPath, 'utf8');
-      const profilePreload = '  <link rel="preload" as="image" href="profile.jpg" fetchpriority="high">';
-      aboutHtml = aboutHtml.replace('</head>', `${profilePreload}\n</head>`);
+      const profilePreloadTag = buildImagePreloadTag(profileFallback, profileSrcset, '100vw');
+      aboutHtml = aboutHtml.replace('</head>', `${profilePreloadTag}\n</head>`);
+      // Update the img src and srcset in about.html
+      const profileImgRegex = /<img\s+id="about-photo"[^>]*>/;
+      let srcsetAttr = '';
+      if (profileSrcset) {
+        srcsetAttr = ` srcset="${escapeHtml(profileSrcset)}" sizes="100vw"`;
+      }
+      const newProfileImg = `<img id="about-photo" src="${escapeHtml(profileFallback)}"${srcsetAttr} alt="Profile photo" class="about-photo" loading="eager" fetchpriority="high">`;
+      aboutHtml = aboutHtml.replace(profileImgRegex, newProfileImg);
       fs.writeFileSync(aboutHtmlDistPath, aboutHtml);
     }
   } else {

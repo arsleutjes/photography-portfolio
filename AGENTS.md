@@ -113,7 +113,7 @@ portfolio/
           cover.jpg          <- placeholder or real image
           01.jpg
     about.md                 <- source content for the about page
-    profile.jpg              <- optional profile photo; copied to _site/ and preloaded as LCP image on the about page
+    profile.jpg              <- optional profile photo; optimized to responsive WebP variants and cached in .cache/
   build.js                   <- main build script (image optimisation + manifest + pre-render)
   package.json               <- scripts: dev, build; devDependencies: sharp, marked, terser, clean-css, serve
   .gitignore                 <- must exclude: _site/, node_modules/
@@ -142,8 +142,12 @@ Running `node build.js` produces a clean `_site/` folder:
 4. **About page pre-render** — parses `content/about.md` with `marked`, injects the HTML into
    `_site/about.html`'s `#about-content` div, and sets `data-prerendered="true"` on it so
    the client-side JS skips the runtime fetch. If `content/profile.jpg` exists, it is
-   copied to `_site/profile.jpg` and a `<link rel="preload" as="image" fetchpriority="high">`
-   hint is injected into `<head>` so the browser discovers the LCP profile photo immediately.
+   optimised to responsive WebP variants at 400w, 800w, 1200w, and 1920w (quality 85),
+   cached in `.cache/`, and written to `_site/`. The `<img id="about-photo">` tag is
+   updated with `src` (pointing to the largest variant) and `srcset` for responsive
+   loading. A `<link rel="preload" as="image" fetchpriority="high">` hint with responsive
+   srcset and sizes is injected into `<head>` so the browser can fetch the appropriately
+   sized variant immediately.
 5. **Image optimisation** — for every image under `content/photos/`, uses `sharp` to generate
    four WebP variants at 400w, 800w, 1200w, and 1920w (quality 85), writing them to
    `_site/photos/`. Before invoking sharp, `build.js` checks `.cache/cache-index.json`
